@@ -85,6 +85,41 @@ func call_go_function_pointer_motion(x C.int, y C.int) {
 	fmt.Printf("Pointer moved to (%d, %d)\n", x, y)
 }
 
+var keyBuffer [32]C.char
+
+func handleKeyPress(event *C.XKeyEvent, display *C.Display) {
+	var buffer [32]C.char
+	var keysym C.KeySym
+
+	// Преобразование события нажатия клавиши в строку
+	keycount := C.XLookupString(event, &buffer[0], C.int(len(buffer)), &keysym, nil)
+	if keycount > 0 {
+		keyStr := C.GoStringN(&buffer[0], C.int(keycount))
+		fmt.Printf("Key pressed: %d, Char: %s\n", event.keycode, keyStr)
+	} else {
+		fmt.Printf("Key pressed: %d\n", event.keycode)
+	}
+
+	// Определение состояния модификаторов
+	shiftPressed := event.state&C.ShiftMask != 0
+	controlPressed := event.state&C.ControlMask != 0
+	altPressed := event.state&C.Mod1Mask != 0
+	capsLockPressed := event.state&C.LockMask != 0
+
+	fmt.Printf("Ctrl: %v, Alt: %v, Shift: %v, CapsLock: %v\n",
+		controlPressed, altPressed, shiftPressed, capsLockPressed)
+}
+
+func printUserInput(display *C.Display, event *C.XKeyEvent) {
+	// Translate the state of the keyboard buffer to a human-readable string
+	var buf [32]C.char
+	keycount := C.XLookupString(event, &buf[0], 32, nil, nil)
+	if keycount > 0 {
+		keyStr := C.GoStringN(&buf[0], C.int(keycount))
+		fmt.Printf("User input: %s\n", keyStr)
+	}
+}
+
 func main() {
 	display := C.XOpenDisplay(nil)
 	if display == nil {
@@ -120,7 +155,7 @@ func main() {
 			handleConfigureNotify(xconfigure, display, window, gc)
 		case C.KeyPress:
 			xkey := (*C.XKeyEvent)(unsafe.Pointer(&event))
-			call_go_function_key_press(C.int(xkey.keycode))
+			handleKeyPress(xkey, display)
 		case C.ButtonPress:
 			xbutton := (*C.XButtonEvent)(unsafe.Pointer(&event))
 			call_go_function_button_press(C.int(xbutton.button), C.int(xbutton.x), C.int(xbutton.y))
