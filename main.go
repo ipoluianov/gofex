@@ -6,10 +6,29 @@ package main
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <stdlib.h>
+#include <locale.h>
+#include <string.h>
 
-extern void call_go_function_key_press(int keycode);
-extern void call_go_function_button_press(int button, int x, int y);
-extern void call_go_function_pointer_motion(int x, int y);
+XIC xic;
+XIM xim;
+
+void initializeXIM(Display *display, Window window) {
+    setlocale(LC_ALL, "");
+    XSetLocaleModifiers("");
+    xim = XOpenIM(display, NULL, NULL, NULL);
+    if (!xim) {
+        XSetLocaleModifiers("@im=none");
+        xim = XOpenIM(display, NULL, NULL, NULL);
+    }
+    if (xim) {
+        xic = XCreateIC(xim,
+                        XNInputStyle, XIMPreeditNothing | XIMStatusNothing,
+                        XNClientWindow, window,
+                        XNFocusWindow, window,
+                        NULL);
+    }
+}
+
 */
 import "C"
 import (
@@ -70,17 +89,14 @@ func handleConfigureNotify(event *C.XConfigureEvent, display *C.Display, window 
 	drawImage(display, window, gc, img)
 }
 
-//export call_go_function_key_press
 func call_go_function_key_press(keycode C.int) {
 	fmt.Printf("Key pressed: %d\n", keycode)
 }
 
-//export call_go_function_button_press
 func call_go_function_button_press(button C.int, x C.int, y C.int) {
 	fmt.Printf("Button pressed: %d at (%d, %d)\n", button, x, y)
 }
 
-//export call_go_function_pointer_motion
 func call_go_function_pointer_motion(x C.int, y C.int) {
 	fmt.Printf("Pointer moved to (%d, %d)\n", x, y)
 }
@@ -90,9 +106,10 @@ var keyBuffer [32]C.char
 func handleKeyPress(event *C.XKeyEvent, display *C.Display) {
 	var buffer [32]C.char
 	var keysym C.KeySym
+	var status C.Status
 
-	// Преобразование события нажатия клавиши в строку
-	keycount := C.XLookupString(event, &buffer[0], C.int(len(buffer)), &keysym, nil)
+	// Преобразование события нажатия клавиши в строку с учетом локали
+	keycount := C.Xutf8LookupString(C.xic, event, &buffer[0], C.int(len(buffer)), &keysym, &status)
 	if keycount > 0 {
 		keyStr := C.GoStringN(&buffer[0], C.int(keycount))
 		fmt.Printf("Key pressed: %d, Char: %s\n", event.keycode, keyStr)
@@ -136,6 +153,8 @@ func main() {
 	defer C.free(unsafe.Pointer(msg))
 	C.XSetStandardProperties(display, window, msg, msg, 0, nil, 0, nil)
 	C.XSelectInput(display, window, C.ExposureMask|C.KeyPressMask|C.ButtonPressMask|C.PointerMotionMask|C.StructureNotifyMask)
+
+	C.initializeXIM(display, window)
 
 	wmDeleteMessage := C.XInternAtom(display, C.CString("WM_DELETE_WINDOW"), C.False)
 	C.XSetWMProtocols(display, window, &wmDeleteMessage, 1)
