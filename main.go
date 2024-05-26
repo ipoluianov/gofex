@@ -8,6 +8,7 @@ package main
 #include <stdlib.h>
 #include <locale.h>
 #include <string.h>
+#include <X11/cursorfont.h>
 
 XIC xic;
 XIM xim;
@@ -36,6 +37,8 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
+	"os"
+	"time"
 	"unsafe"
 )
 
@@ -77,6 +80,13 @@ func drawImage(display *C.Display, window C.Window, gc C.GC, img *image.RGBA) {
 	C.free(unsafe.Pointer(ximage))
 }
 
+func changeWindowTitle(display *C.Display, window C.Window, title string) {
+	ctitle := C.CString(title)
+	defer C.free(unsafe.Pointer(ctitle))
+	C.XStoreName(display, window, ctitle)
+	C.XFlush(display)
+}
+
 func handleConfigureNotify(event *C.XConfigureEvent, display *C.Display, window C.Window, gc C.GC) {
 	width := int(event.width)
 	height := int(event.height)
@@ -98,10 +108,19 @@ func call_go_function_button_press(button C.int, x C.int, y C.int) {
 }
 
 func call_go_function_pointer_motion(x C.int, y C.int) {
-	fmt.Printf("Pointer moved to (%d, %d)\n", x, y)
+	//fmt.Printf("Pointer moved to (%d, %d)\n", x, y)
 }
 
-var keyBuffer [32]C.char
+func resizeWindow(display *C.Display, window C.Window, width, height int) {
+	C.XResizeWindow(display, window, C.uint(width), C.uint(height))
+	C.XFlush(display)
+}
+
+func changeCursor(display *C.Display, window C.Window, cursorShape uint) {
+	cursor := C.XCreateFontCursor(display, C.uint(cursorShape))
+	C.XDefineCursor(display, window, cursor)
+	C.XFlush(display)
+}
 
 func handleKeyPress(event *C.XKeyEvent, display *C.Display) {
 	var buffer [32]C.char
@@ -137,6 +156,59 @@ func printUserInput(display *C.Display, event *C.XKeyEvent) {
 	}
 }
 
+func setWindowSizeHints(display *C.Display, window C.Window, minWidth, minHeight, maxWidth, maxHeight int) {
+	var hints C.XSizeHints
+	hints.flags = C.PMinSize | C.PMaxSize
+	hints.min_width = C.int(minWidth)
+	hints.min_height = C.int(minHeight)
+	hints.max_width = C.int(maxWidth)
+	hints.max_height = C.int(maxHeight)
+	C.XSetWMNormalHints(display, window, &hints)
+	C.XFlush(display)
+}
+
+func moveWindow(display *C.Display, window C.Window, x, y int) {
+	C.XMoveWindow(display, window, C.int(x), C.int(y))
+	C.XFlush(display)
+}
+
+func closeWindow(display *C.Display, window C.Window) {
+	C.XDestroyWindow(display, window)
+	C.XCloseDisplay(display)
+	os.Exit(0)
+}
+
+var counterClose = 0
+
+// Функция для предотвращения закрытия окна
+func preventClose(display *C.Display, window C.Window) {
+	fmt.Println("Attempting to close window. Perform necessary actions before closing.")
+	// Здесь можно вставить код для сохранения данных или отображения диалогового окна
+	counterClose++
+	if counterClose > 3 {
+		closeWindow(display, window)
+	}
+}
+
+func handleVisibilityNotify(event *C.XVisibilityEvent) {
+	switch event.state {
+	case C.VisibilityUnobscured:
+		fmt.Println("Window is fully visible")
+	case C.VisibilityPartiallyObscured:
+		fmt.Println("Window is partially obscured")
+	case C.VisibilityFullyObscured:
+		fmt.Println("Window is fully obscured")
+	}
+}
+
+func handleEnterNotify(event *C.XCrossingEvent) {
+	fmt.Println("Pointer entered the window")
+}
+
+func handleLeaveNotify(event *C.XCrossingEvent) {
+	fmt.Println("Pointer left the window")
+}
+
 func main() {
 	display := C.XOpenDisplay(nil)
 	if display == nil {
@@ -152,7 +224,7 @@ func main() {
 	msg := C.CString("Hello, World!")
 	defer C.free(unsafe.Pointer(msg))
 	C.XSetStandardProperties(display, window, msg, msg, 0, nil, 0, nil)
-	C.XSelectInput(display, window, C.ExposureMask|C.KeyPressMask|C.ButtonPressMask|C.PointerMotionMask|C.StructureNotifyMask)
+	C.XSelectInput(display, window, C.ExposureMask|C.StructureNotifyMask|C.KeyPressMask|C.ButtonPressMask|C.PointerMotionMask|C.StructureNotifyMask|C.FocusChangeMask|C.VisibilityChangeMask|C.EnterWindowMask|C.LeaveWindowMask)
 
 	C.initializeXIM(display, window)
 
@@ -163,32 +235,67 @@ func main() {
 	gc := C.XCreateGC(display, C.Drawable(window), 0, nil)
 	defer C.XFreeGC(display, gc)
 
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
 	var event C.XEvent
 	for {
-		C.XNextEvent(display, &event)
-		eventType := *(*C.int)(unsafe.Pointer(&event))
-		switch eventType {
-		case C.Expose:
-			// Initial draw when the window is exposed
+		select {
+		case <-ticker.C:
+			// Обновление содержимого окна каждую секунду
 			xconfigure := (*C.XConfigureEvent)(unsafe.Pointer(&event))
 			handleConfigureNotify(xconfigure, display, window, gc)
-		case C.KeyPress:
-			xkey := (*C.XKeyEvent)(unsafe.Pointer(&event))
-			handleKeyPress(xkey, display)
-		case C.ButtonPress:
-			xbutton := (*C.XButtonEvent)(unsafe.Pointer(&event))
-			call_go_function_button_press(C.int(xbutton.button), C.int(xbutton.x), C.int(xbutton.y))
-		case C.MotionNotify:
-			xmotion := (*C.XMotionEvent)(unsafe.Pointer(&event))
-			call_go_function_pointer_motion(C.int(xmotion.x), C.int(xmotion.y))
-		case C.ConfigureNotify:
-			xconfigure := (*C.XConfigureEvent)(unsafe.Pointer(&event))
-			handleConfigureNotify(xconfigure, display, window, gc)
-		case C.ClientMessage:
-			xclient := (*C.XClientMessageEvent)(unsafe.Pointer(&event))
-			if C.Atom(*(*C.long)(unsafe.Pointer(&xclient.data))) == wmDeleteMessage {
-				return
+		default:
+			if C.XPending(display) > 0 {
+				C.XNextEvent(display, &event)
+				eventType := *(*C.int)(unsafe.Pointer(&event))
+				switch eventType {
+				case C.Expose:
+					// Initial draw when the window is exposed
+					xconfigure := (*C.XConfigureEvent)(unsafe.Pointer(&event))
+					handleConfigureNotify(xconfigure, display, window, gc)
+				case C.KeyPress:
+					xkey := (*C.XKeyEvent)(unsafe.Pointer(&event))
+					handleKeyPress(xkey, display)
+				case C.ButtonPress:
+					xbutton := (*C.XButtonEvent)(unsafe.Pointer(&event))
+					call_go_function_button_press(C.int(xbutton.button), C.int(xbutton.x), C.int(xbutton.y))
+					//changeWindowTitle(display, window, "asdasdas")
+					//resizeWindow(display, window, 500, 100)
+					//changeCursor(display, window, C.XC_hand2)
+					//setWindowSizeHints(display, window, 100, 100, 300, 300)
+					moveWindow(display, window, 100, 100)
+				case C.MotionNotify:
+					xmotion := (*C.XMotionEvent)(unsafe.Pointer(&event))
+					call_go_function_pointer_motion(C.int(xmotion.x), C.int(xmotion.y))
+				case C.ConfigureNotify:
+					xconfigure := (*C.XConfigureEvent)(unsafe.Pointer(&event))
+					handleConfigureNotify(xconfigure, display, window, gc)
+				case C.ClientMessage:
+					xclient := (*C.XClientMessageEvent)(unsafe.Pointer(&event))
+					if C.Atom(*(*C.long)(unsafe.Pointer(&xclient.data))) == wmDeleteMessage {
+						preventClose(display, window)
+					}
+				case C.VisibilityNotify:
+					xvisibility := (*C.XVisibilityEvent)(unsafe.Pointer(&event))
+					handleVisibilityNotify(xvisibility)
+				case C.UnmapNotify:
+					fmt.Println("Window minimized")
+				case C.MapNotify:
+					fmt.Println("Window restored")
+				case C.FocusIn:
+					fmt.Println("Window gained focus")
+				case C.FocusOut:
+					fmt.Println("Window lost focus")
+				case C.EnterNotify:
+					xcrossing := (*C.XCrossingEvent)(unsafe.Pointer(&event))
+					handleEnterNotify(xcrossing)
+				case C.LeaveNotify:
+					xcrossing := (*C.XCrossingEvent)(unsafe.Pointer(&event))
+					handleLeaveNotify(xcrossing)
+				}
 			}
 		}
 	}
+
 }
